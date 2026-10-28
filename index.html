@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>بروفايل الشركة - Interactive Flipbook</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.js"></script>
+</head>
+<body>
+
+    <!-- شريط التحكم -->
+    <div class="toolbar">
+        <button id="prev-page">❯ الصفحة السابقة</button>
+        <span id="page-info">صفحة <span id="current-page">1</span> من <span id="total-pages">--</span></span>
+        <button id="next-page">الصفحة التالية ❮</button>
+        <button id="fullscreen-btn">⛶ ملء الشاشة</button>
+        <!-- ضع ملف الـ PDF بجانب index.html باسم profile.pdf -->
+        <a class="btn" href="profile.pdf" download="company-profile.pdf">⬇ تحميل PDF</a>
+    </div>
+
+    <!-- حاوية الكتاب -->
+    <div class="book-container">
+        <div class="book-wrap">
+            <div id="shift">
+                <div id="book"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+
+            // ================= الإعدادات =================
+            const TOTAL_PAGES = 10;            // لازم يكون عدد زوجي
+            const FLIP_MS = 600;               // سرعة التقليب (كل ما قل الرقم بقى أسرع)
+            const CENTER_ON_WINDOW = false;    // true = توسيط على الشاشة كلها | false = تحت الشريط العلوي
+            const imagePath = (n) => `images/page${n}.png`;
+            // =============================================
+
+            // منع أي سكرول أو تحديد نص بيحصل وانت بتسحب بالماوس (ده اللي كان بينزّل الكتاب)
+            document.addEventListener("scroll", (e) => {
+                const t = e.target;
+                if (t === document) { window.scrollTo(0, 0); return; }
+                if (t.scrollTop) t.scrollTop = 0;
+                if (t.scrollLeft) t.scrollLeft = 0;
+            }, true);
+            document.addEventListener("selectstart", (e) => e.preventDefault());
+            document.addEventListener("dragstart", (e) => e.preventDefault());
+
+            const bookElement = document.getElementById("book");
+            const shiftElement = document.getElementById("shift");
+            const stage = document.querySelector(".book-wrap");
+            const currentEl = document.getElementById("current-page");
+            document.getElementById("total-pages").textContent = TOTAL_PAGES;
+
+            /*
+              الترتيب جوه المكتبة (من الشمال لليمين):
+              [10] [8 9] [6 7] [4 5] [2 3] [1]
+            */
+            const order = [TOTAL_PAGES];
+            for (let n = TOTAL_PAGES - 2; n >= 2; n -= 2) {
+                order.push(n);
+                order.push(n + 1);
+            }
+            order.push(1);
+            const lastIndex = order.length - 1;
+
+            // نقرأ مقاس أول صورة تلقائياً
+            const probe = new Image();
+            probe.onload = () => init(probe.naturalWidth, probe.naturalHeight);
+            probe.onerror = () => init(595, 842); // احتياطي: نسبة A4
+            probe.src = imagePath(1);
+
+            function init(imgW, imgH) {
+
+                const pages = order.map((n, i) => {
+                    const page = document.createElement("div");
+                    page.className = "page";
+                    if (i === 0 || i === lastIndex) page.classList.add("cover-page"); // أول وآخر صفحة
+                    page.setAttribute("data-density", "soft");
+                    const img = document.createElement("img");
+                    img.src = imagePath(n);
+                    img.alt = "Page " + n;
+                    img.draggable = false;
+                    page.appendChild(img);
+                    bookElement.appendChild(page);
+                    return page;
+                });
+
+                const pageFlip = new St.PageFlip(bookElement, {
+                    width: imgW,
+                    height: imgH,
+                    size: "stretch",
+                    minWidth: 100,
+                    maxWidth: 4000,
+                    minHeight: 100,
+                    maxHeight: 4000,
+                    startPage: lastIndex,
+                    showCover: true,
+                    flippingTime: FLIP_MS,
+                    drawShadow: true,
+                    maxShadowOpacity: 0.65,
+                    usePortrait: true,
+                    autoSize: true,
+                    useMouseEvents: true,
+                    swipeDistance: 30,
+                    clickEventForward: false,
+                    mobileScrollSupport: false
+                });
+
+                pageFlip.loadFromHTML(pages);
+
+                /* ============================================================
+                   التوسيط
+                   - بيتحسب بس وقت السكون (state = read) عشان مفيش تعارض مع الحركة
+                   - وانت بتسحب: الكتاب ثابت تماماً
+                   - لما غلاف يتفتح: الكتاب بيتحرك مع التقليب بنفس المدة
+                   ============================================================ */
+                let state = "read";
+                let restSingle = true; // هل الكتاب حالياً صفحة واحدة (غلاف)؟
+
+                function getShift() {
+                    const m = new DOMMatrixReadOnly(getComputedStyle(shiftElement).transform);
+                    return { x: m.m41, y: m.m42 };
+                }
+
+                function setShift(x, y, ms) {
+                    shiftElement.style.transitionDuration = ms + "ms";
+                    shiftElement.style.transform = `translate(${x}px, ${y}px)`;
+                }
+
+                function centerBook(ms) {
+                    if (state !== "read") return false;
+
+                    const items = Array.from(bookElement.querySelectorAll(".stf__item"))
+                        .filter((el) => getComputedStyle(el).display !== "none");
+                    if (!items.length) return false;
+
+                    let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity, maxW = 0;
+                    items.forEach((el) => {
+                        const b = el.getBoundingClientRect();
+                        left = Math.min(left, b.left);
+                        right = Math.max(right, b.right);
+                        top = Math.min(top, b.top);
+                        bottom = Math.max(bottom, b.bottom);
+                        maxW = Math.max(maxW, b.width);
+                    });
+                    if (maxW < 10) return false;
+
+                    restSingle = (right - left) < maxW * 1.5;
+
+                    const s = CENTER_ON_WINDOW
+                        ? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }
+                        : stage.getBoundingClientRect();
+
+                    const dx = (s.left + s.width / 2) - ((left + right) / 2);
+                    const dy = (s.top + s.height / 2) - ((top + bottom) / 2);
+
+                    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+                        const cur = getShift();
+                        setShift(cur.x + dx, cur.y + dy, ms);
+                    }
+                    return true;
+                }
+
+                pageFlip.on("changeState", (e) => {
+                    state = e.data;
+
+                    if (state === "read") {
+                        bookElement.classList.add("resting");
+                        setTimeout(() => centerBook(450), 40);
+                    }
+
+                    if (state === "user_fold" || state === "flipping") {
+                        bookElement.classList.remove("resting");
+                    }
+
+                    // فتح الغلاف: الكتاب بيرجع للنص مع حركة التقليب نفسها
+                    if (state === "flipping" && restSingle && pageFlip.getOrientation() === "landscape") {
+                        const cur = getShift();
+                        setShift(0, cur.y, FLIP_MS);
+                        restSingle = false;
+                    }
+                });
+
+                // أول تحميل: نحاول لحد ما الصفحات تظهر
+                let tries = 0;
+                (function firstCenter() {
+                    if (!centerBook(0) && tries++ < 30) setTimeout(firstCenter, 100);
+                })();
+                setTimeout(() => centerBook(300), 800);
+                bookElement.classList.add("resting");
+
+                let resizeTimer;
+                window.addEventListener("resize", () => {
+                    clearTimeout(resizeTimer);
+                    resizeTimer = setTimeout(() => centerBook(0), 300);
+                });
+
+                /* ---------- رقم الصفحة ---------- */
+                function updateNumber(idx) {
+                    if (idx === 0 || idx === lastIndex) {
+                        currentEl.textContent = order[idx];
+                        return;
+                    }
+                    const start = idx % 2 === 1 ? idx : idx - 1;
+                    const a = order[start], b = order[start + 1];
+                    currentEl.textContent = Math.min(a, b) + " - " + Math.max(a, b);
+                }
+                updateNumber(pageFlip.getCurrentPageIndex());
+
+                pageFlip.on("flip", (e) => {
+                    updateNumber(e.data);
+                });
+
+                /* ---------- الأزرار (معكوسة بسبب الترتيب العكسي) ---------- */
+                const goNext = () => pageFlip.flipPrev();
+                const goPrev = () => pageFlip.flipNext();
+
+                document.getElementById("next-page").addEventListener("click", goNext);
+                document.getElementById("prev-page").addEventListener("click", goPrev);
+
+                document.addEventListener("keydown", (e) => {
+                    if (e.key === "ArrowLeft") goNext();
+                    if (e.key === "ArrowRight") goPrev();
+                });
+
+                document.getElementById("fullscreen-btn").addEventListener("click", () => {
+                    if (!document.fullscreenElement) {
+                        document.documentElement.requestFullscreen();
+                    } else if (document.exitFullscreen) {
+                        document.exitFullscreen();
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>
